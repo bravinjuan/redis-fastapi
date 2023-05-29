@@ -1,0 +1,3 @@
+redis/
+.env
+__pycache__
