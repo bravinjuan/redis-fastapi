@@ -8,12 +8,18 @@ from uuid import uuid4
 from typing import List
 from db_config import engine
 import json
-
+from dotenv import load_dotenv
+import os
 import redis
 
 app = FastAPI()
+load_dotenv()
+REDIS_HOST = os.getenv('REDIS_HOST')
+REDIS_PORT = os.getenv('REDIS_PORT')
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 
-r = redis.Redis(host='localhost', port=6379, db=0, password=None, socket_timeout=None)
+# r = redis.Redis(host='localhost', port=6379, db=0, password=None, socket_timeout=None)
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, password=REDIS_PASSWORD, ssl=True)
 
 #consultant.Base.metadata.create_all(bind=engine)
 
@@ -55,11 +61,12 @@ def get_consultants(db: Session = Depends(get_db)):
         # Store in cache
         dict_consultant = vars(consultant_info)
         r.hset('consultants', consultant_info.id, json.dumps(dict_consultant))
+        r.expire('consultants', 2000)
     return list_consultant
 
 @app.get("/consultants/{consultant_id}", response_model=Consultant_info)
 def get_consultant_by_id(db: Session = Depends(get_db), consultant_id=str):
-    cached_consultant = r.hget('consultants', consultant_id)
+    cached_consultant = r.get(consultant_id)
     ##############################
     if cached_consultant:
         consultant = json.loads(cached_consultant)
@@ -92,7 +99,8 @@ def get_consultant_by_id(db: Session = Depends(get_db), consultant_id=str):
                         englishLevel=consultant.EnglishLevel)
         # 
         dict_consultant = vars(consultant_info)
-        r.hset('consultants', consultant_info.id, json.dumps(dict_consultant))
+        r.set(consultant_info.id, json.dumps(dict_consultant))
+        r.expire(consultant_info.id, 2000)
         return consultant_info
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
@@ -116,6 +124,7 @@ def create_consultant(consultant_data: Consultant_create,
     db.add(new_consultant)
     db.commit()
     dict_consultant = vars(consultant_data)
+    # Guardar al crear
     r.hset('consultants',consultant_id,json.dumps(dict_consultant))
     return consultant_id
 
@@ -137,13 +146,15 @@ def update_consultant(consultant_data: Consultant_create, db: Session = Depends(
                     "EnglishLevel": consultant_data.englishLevel,
             })
         db.commit()
-        # 
+        # Actualizar o borrar
         dict_consultant = vars(consultant_data)
-        r.hset('consultants',consultant_id,json.dumps(dict_consultant))
-        return {"msg": "Consultant has been Update"}
+        consultant = json.dumps(dict_consultant,default=str)
+        r.hset('consultants',consultant_id, consultant)
+        r.set(consultant_id, consultant)
+        return {"msg": "Consultant has been Updated"}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Error: {e}")
+                            detail="Error: "+str(e))
 
 @app.delete("/consultants/{consultant_id}")
 def delete_consultant(db: Session = Depends(get_db), consultant_id=str):
@@ -151,8 +162,10 @@ def delete_consultant(db: Session = Depends(get_db), consultant_id=str):
         consultant = db.query(Consultant).filter(
                         Consultant.id == consultant_id).delete()
         db.commit()
+        # Borrar
         r.hdel('consultants', consultant_id)
-        return {"msg": "Consultant has been Delete"}
+        r.delete(consultant_id)
+        return {"msg": "Consultant has been Deleted"}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Error: {e}")
+                            detail="Error: "+str(e))
